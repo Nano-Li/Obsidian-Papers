@@ -25,13 +25,13 @@ def save_state(path, state):
     temporary.replace(path)
 
 
-def convert(pdf: Path, title: str, config: Path) -> Path:
+def convert(pdf: Path, title: str, config: Path, *, keep_pdf: bool = False) -> Path:
     checkpoint = checkpoint_path(pdf, config)
     with conversion_lock(checkpoint):
-        return _convert(pdf, title, config, checkpoint)
+        return _convert(pdf, title, config, checkpoint, keep_pdf=keep_pdf)
 
 
-def _convert(pdf: Path, title: str, config: Path, checkpoint: Path) -> Path:
+def _convert(pdf: Path, title: str, config: Path, checkpoint: Path, *, keep_pdf: bool) -> Path:
     if not validate_pdf(pdf, 1024)[0] or pdf.stat().st_size > 200 * 1024 * 1024:
         raise ValueError('Input must be a valid PDF no larger than 200 MB')
     settings = load_settings(config)
@@ -79,6 +79,15 @@ def _convert(pdf: Path, title: str, config: Path, checkpoint: Path) -> Path:
                     extracted_title = _extract_title_from_layout(markdown.parent / 'layout.json')
                     result_path = flatten_result(extracted, markdown, output, extracted_title or title)
                 # Staging (ZIP, JSON and other artifacts) is gone before returning.
+                if not keep_pdf:
+                    # Only remove this successfully converted source, never a PDF
+                    # replaced or edited while the remote conversion was running.
+                    with pdf.open('rb') as handle:
+                        current = hashlib.file_digest(handle, 'sha256').hexdigest()
+                    if current != fingerprint:
+                        raise MinerUError('Markdown saved, but source PDF changed; PDF retained')
+                    pdf.unlink()
+                    print(f'已删除转换成功的 PDF: {pdf}')
                 checkpoint.unlink(missing_ok=True)
                 return result_path
             time.sleep(min(settings.poll_seconds, max(0, deadline - time.monotonic())))

@@ -134,7 +134,8 @@ async def run(args):
                     title = args.title[index] if args.title else None
                     pdf, title = await download_one(ctx, engine, url, title, root)
                     if not args.pdf_only:
-                        markdown = await asyncio.to_thread(convert, pdf, title, Path(args.mineru_config))
+                        markdown = await asyncio.to_thread(convert, pdf, title, Path(args.mineru_config),
+                                                           keep_pdf=args.keep_pdf)
                         print(f'Markdown: {markdown}')
                 except Exception as exc:
                     failures += 1
@@ -184,6 +185,7 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--pdf-only', action='store_true', help='仅下载 PDF，不转换或请求 token')
     mode.add_argument('--markdown', action='store_true', help='兼容旧入口；转换已是默认行为')
+    parser.add_argument('--keep-pdf', action='store_true', help='转换成功后保留 PDF；默认成功后删除，失败时保留')
     parser.add_argument('--mineru-config', default=str(ROOT / 'config/mineru.local.toml'))
     parser.add_argument('--configure-mineru', action='store_true', help='隐藏输入 token 并保存到私人配置')
     parser.add_argument('--prepare-profile', action='store_true')
@@ -206,7 +208,8 @@ def main(argv=None):
                 return 0
             ensure_token(Path(args.mineru_config))
             from .convert import convert
-            print(convert(args.convert_pdf.resolve(), args.title[0], Path(args.mineru_config)))
+            print(convert(args.convert_pdf.resolve(), args.title[0], Path(args.mineru_config),
+                          keep_pdf=args.keep_pdf))
             return 0
         if not args.prepare_profile and not args.urls:
             parser.error('Provide one or more paper URLs')
@@ -218,7 +221,8 @@ def main(argv=None):
         if args.dry_run:
             print(json.dumps(dict(urls=args.urls, output=args.output,
                                   filenames=[title_filename(t) + '.pdf' for t in (args.title or [])],
-                                  markdown=not args.pdf_only), ensure_ascii=False))
+                                  markdown=not args.pdf_only,
+                                  keep_pdf=args.keep_pdf or args.pdf_only), ensure_ascii=False))
             return 0
         if not args.pdf_only and not args.prepare_profile:
             ensure_token(Path(args.mineru_config))

@@ -166,6 +166,7 @@ class ConversionTests(unittest.TestCase):
             vault = root / 'vault'
             vault.mkdir()
             (vault / 'Existing.md').write_text('existing')
+            (vault / 'Other.pdf').write_bytes(b'other paper')
             (vault / 'images').mkdir()
             (vault / 'images/1.png').write_bytes(b'old image')
             pdf = vault / 'Metadata_Title.pdf'
@@ -180,9 +181,43 @@ class ConversionTests(unittest.TestCase):
             self.assertEqual(len(renamed), 1)
             self.assertEqual(renamed[0].read_bytes(), b'new image')
             self.assertIn('images/' + renamed[0].name, markdown.read_text())
-            self.assertEqual({p.name for p in vault.iterdir()}, {'Existing.md', 'images', pdf.name, markdown.name})
+            self.assertFalse(pdf.exists())
+            self.assertEqual((vault / 'Other.pdf').read_bytes(), b'other paper')
+            self.assertEqual({p.name for p in vault.iterdir()}, {'Existing.md', 'Other.pdf', 'images', markdown.name})
             self.assertFalse(checkpoint_path(pdf, config).exists())
             self.assertFalse(list(vault.glob('.mineru-*')))
+
+    def test_keep_pdf_preserves_successfully_converted_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / 'Paper.pdf'
+            original = b'%PDF-1.7\n' + b' ' * 11000
+            pdf.write_bytes(original)
+            config = config_at(root)
+            with patch('obpaper.convert.Client', FakeClient):
+                markdown = convert(pdf, 'Paper', config, keep_pdf=True)
+            self.assertTrue(markdown.is_file())
+            self.assertEqual(pdf.read_bytes(), original)
+            self.assertFalse(checkpoint_path(pdf, config).exists())
+
+    def test_source_changed_during_conversion_is_never_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / 'Paper.pdf'
+            original = b'%PDF-1.7\n' + b' ' * 11000
+            pdf.write_bytes(original)
+            config = config_at(root)
+            download_result = FakeClient.download
+            def replace_source(client, url, path):
+                download_result(client, url, path)
+                pdf.write_bytes(original + b'edited')
+            with patch('obpaper.convert.Client', FakeClient), \
+                 patch.object(FakeClient, 'download', replace_source), \
+                 self.assertRaisesRegex(MinerUError, 'source PDF changed'):
+                convert(pdf, 'Paper', config)
+            self.assertEqual(pdf.read_bytes(), original + b'edited')
+            self.assertTrue((root / 'Actual_Paper_Title.md').is_file())
+            self.assertTrue(checkpoint_path(pdf, config).is_file())
 
     def test_interruption_resumes_batch_outside_vault(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -296,11 +331,12 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
             async def download(ctx, engine, url, title, root):
                 calls.append('download:' + url)
                 return root / (title + '.pdf'), title
-            def conversion(pdf, title, config):
+            def conversion(pdf, title, config, *, keep_pdf):
+                self.assertFalse(keep_pdf)
                 calls.append('convert:' + title)
                 return pdf.with_suffix('.md')
             args = argparse.Namespace(urls=['https://example.test/a', 'https://example.test/b'], title=['A', 'B'],
-                                      output=str(root / 'out'), prepare_profile=False, pdf_only=False,
+                                      output=str(root / 'out'), prepare_profile=False, pdf_only=False, keep_pdf=False,
                                       mineru_config=str(root / 'mineru.local.toml'))
             with patch('obpaper.cli.load_engine', return_value=MagicMock()), \
                  patch('obpaper.cli.PROFILE', root / 'profile'), \
@@ -310,6 +346,31 @@ class DownloadTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await run(args), 0)
             self.assertEqual(calls, ['download:https://example.test/a', 'convert:A',
                                      'download:https://example.test/b', 'convert:B'])
+
+    async def test_pdf_only_success_retains_download_without_conversion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ctx = MagicMock(pages=[])
+            ctx.close = AsyncMock()
+            pw = MagicMock()
+            pw.chromium.launch_persistent_context = AsyncMock(return_value=ctx)
+            manager = MagicMock()
+            manager.__aenter__ = AsyncMock(return_value=pw)
+            manager.__aexit__ = AsyncMock(return_value=False)
+            async def download(ctx, engine, url, title, root):
+                pdf = root / 'Paper.pdf'
+                pdf.write_bytes(b'%PDF-1.7\n' + b' ' * 11000)
+                return pdf, 'Paper'
+            args = argparse.Namespace(urls=['https://example.test/a'], title=None,
+                                      output=str(root / 'out'), prepare_profile=False, pdf_only=True,
+                                      keep_pdf=False, mineru_config=str(root / 'mineru.local.toml'))
+            with patch('obpaper.cli.load_engine', return_value=MagicMock()), \
+                 patch('obpaper.cli.PROFILE', root / 'profile'), \
+                 patch('playwright.async_api.async_playwright', return_value=manager), \
+                 patch('obpaper.cli.download_one', side_effect=download), \
+                 patch('obpaper.convert.convert', side_effect=AssertionError('no conversion')):
+                self.assertEqual(await run(args), 0)
+            self.assertTrue((root / 'out/Paper.pdf').is_file())
 
 
 if __name__ == '__main__':

@@ -5,7 +5,7 @@ description: 将给定的一个或多个论文链接通过校园网下载为 PDF
 
 # Obsidian Papers
 
-给定论文链接后，默认执行“校园网下载 PDF → 上传 MinerU 转换 → PDF、Markdown 和图片保存到知识库合适位置”。仅当用户指定只要 PDF 时使用 `--pdf-only`。不做检索、筛选或摘要生成。
+给定论文链接后，默认执行“校园网下载 PDF → 上传 MinerU 转换 → Markdown 和图片保存到知识库合适位置，成功后删除对应 PDF”。仅当用户指定只要 PDF 时使用 `--pdf-only`。用户明确要求保留 PDF 时加 `--keep-pdf`；用户未提及时默认删除转换成功的 PDF。仅下载 PDF、转换失败或中断时保留 PDF。不做检索、筛选或摘要生成。
 
 ## 首次使用与目标目录
 
@@ -28,6 +28,8 @@ description: 将给定的一个或多个论文链接通过校园网下载为 PDF
 ```powershell
 # 默认：一个或多个链接，逐篇下载后立即转换，直接放入已有目标目录
 .venv/Scripts/obsidian-papers.exe "链接1" "链接2" --output "知识库已有目录"
+# 用户要求转换后也保留 PDF
+.venv/Scripts/obsidian-papers.exe "链接1" --output "知识库已有目录" --keep-pdf
 # 用户只要求 PDF
 .venv/Scripts/obsidian-papers.exe "链接1" "链接2" --output "知识库已有目录" --pdf-only
 ```
@@ -35,14 +37,14 @@ description: 将给定的一个或多个论文链接通过校园网下载为 PDF
 - 已获得校园确认、已配置 token 且目标明确后，一气完成下载与转换，不在每篇论文或转换阶段反复确认。默认工作流本身包括向 MinerU 上传，无需额外的 `--markdown`。
 - 支持 DOI 链接、出版社页面和 PDF 直链。优先获取准确论文标题；元数据缺失或有误时通过重复的 `--title "标题"` 按链接顺序指定。标题不可靠时先查清，不使用 DOI 或 `full.md` 作为论文标题。
 - 登录失败时可运行 `.venv/Scripts/obsidian-papers.exe "链接" --prepare-profile`，让用户在专用 Edge 登录；该操作仍须上述校园确认。失败后检查原因，不绕过验证码或无限重试。
-- PDF 已存在但转换中断时，用 `.venv/Scripts/obsidian-papers.exe --convert-pdf "PDF绝对路径" --title "论文标题"` 继续。此命令不启动校园下载，无需重新确认关闭代理。
+- PDF 已存在但转换中断时，用 `.venv/Scripts/obsidian-papers.exe --convert-pdf "PDF绝对路径" --title "论文标题"` 继续。此命令不启动校园下载，无需重新确认关闭代理；成功后也默认删除源 PDF，用户要求保留时加 `--keep-pdf`。
 - MinerU 网络错误或超时保存远端任务供续跑；认证、配额或服务端任务错误停止，不自动反复创建任务。完成后检查点删除。
 
 ## 命名与清理
 
 直接复用 minerU-kit 的 `_clean_for_path` 和首页标题提取函数：删除 `\ / : * ? " < > |` 及控制字符，空白转 `_`，合并连续 `_`，去掉首尾点和下划线，最多 120 字符。额外删除 Obsidian 链接保留字符 `[]#^`，处理 Windows 设备名和 UTF-8 文件名长度。PDF 根据论文元数据标题命名；Markdown 优先采用 MinerU `layout.json` 中的首页论文标题，无标题块时使用已确认的论文标题。
 
-最终目录只新增 `<论文标题>.pdf`、`<论文标题>.md` 和必要的共享 `images/`；不会新增 `paper.json`、`markdown/` 或每篇论文目录。原有其他论文不受影响。
+最终默认只保留 `<论文标题>.md` 和必要的共享 `images/`。仅在 Markdown 和图片全部导出、临时目录清理成功后删除本次转换的 PDF；删除前校验文件未在转换期间被修改。`--keep-pdf` 或 `--pdf-only` 时保留 PDF；不会新增 `paper.json`、`markdown/` 或每篇论文目录。原有其他论文不受影响。
 
 转换 ZIP、JSON、其他解析产物只在临时 `.mineru-*` 子目录中处理；成功或失败都清理临时目录。Markdown 平铺后图片进入共享 `images/`，调整引用；同名图片内容不同则换用内容哈希名称，不能覆盖原图。仅未完成的续跑检查点和运行锁放在技能自己的 `config/.state/`，不写入知识库，也不上传 Git。
 

@@ -1,19 +1,15 @@
 # Obsidian Papers
 
-面向 Obsidian 文献收集的 Codex Skill：提供一个或多个论文链接，默认通过校园网下载 PDF，连续调用 MinerU 转成 Markdown，将文件直接放入知识库指定目录。
+面向 Obsidian 文献收集的 Codex Skill：提供一个或多个论文链接，默认通过校园网下载 PDF，连续调用 MinerU 转成 Markdown，将笔记直接放入知识库指定目录，成功转换后默认删除 PDF。
 
 ## 功能
 
-- **连续处理论文链接**：支持 DOI 链接、出版社页面与 PDF 直链，逐篇完成下载和转换；`--pdf-only` 可只下载 PDF。
-- **校园网下载**：沿用 AutoPaper 的专用 Edge 下载流程，开始前暂停，要求退出 Clash（包括 TUN 模式）并确认。
-- **论文标题命名**：复用 minerU-kit 的命名与首页标题提取代码，空格转下划线，删除文件名禁用字符。
-- **直接保存到已有目录**：PDF 与 Markdown 平铺存放，不为论文或批次新建目录；图片共用 `images/`。
-- **自动清理转换产物**：仅在临时子目录处理 ZIP、JSON 等，提取 Markdown 和图片后删除整个临时目录。
-- **首次 token 引导**：未配置 MinerU token 时先提示提供并保存到独立的本地私人配置，后续复用。
-- **保护现有文献**：不覆盖不同内容的 PDF、Markdown 或图片；转换中断可继续原远端任务。
+- **对话中给链接即可收集论文**：把一个或多个 DOI、出版社页面或 PDF 链接发给 Codex，确认校园网已就绪后，自动通过校园订阅下载正文。
+- **下载后连续转成 Markdown**：自动调用 MinerU，将论文转换为包含公式、表格和图片的笔记；转换成功后默认删除 PDF，也可要求保留或仅下载 PDF。
+- **直接整理进 Obsidian**：按论文标题命名，文件直接放入指定的已有目录，图片共享 `images/`，不为论文额外建文件夹，并自动清理转换中间产物。
 
 ```text
-论文链接（一个或多个）→ 校园网确认 → 下载 PDF → MinerU 转换 → 知识库中的 PDF、Markdown 和图片
+对话中提供论文链接 → 确认校园网 → 下载并转换 → 知识库中的 Markdown 和图片
 ```
 
 ## 安装
@@ -44,13 +40,15 @@ PDF 将上传至 MinerU，使用账号的可用额度。配置项包括模型、
 
 在 Codex 中可直接说：
 
-> 使用 $obsidian-papers，把这些论文链接下载并转成 Markdown，直接放入知识库现有的论文目录。
+> 使用 $obsidian-papers，把这些论文链接通过校园网下载并转成 Markdown，放入知识库现有的论文目录。
 
 脚本入口：
 
 ```powershell
 # 默认下载 PDF 并转换 Markdown，输出目录可以已经有其他论文
 .venv/Scripts/obsidian-papers.exe "论文链接1" "论文链接2" --output "D:/Notes/Papers"
+# 转换后同时保留 PDF
+.venv/Scripts/obsidian-papers.exe "论文链接" --output "D:/Notes/Papers" --keep-pdf
 # 只下载 PDF
 .venv/Scripts/obsidian-papers.exe "论文链接" --output "D:/Notes/Papers" --pdf-only
 # 元数据缺少准确标题时手动指定；多个链接时按顺序重复 --title
@@ -81,12 +79,12 @@ PDF 将上传至 MinerU，使用账号的可用额度。配置项包括模型、
 
 ### 输出与命名
 
+默认只保留成功转换的 Markdown 和图片。只有 Markdown、图片导出及临时目录清理全部成功后才删除对应 PDF；转换失败或中断时保留 PDF 以便续跑。`--keep-pdf` 可保留转换后的 PDF，`--pdf-only` 始终保留 PDF。目录中其他论文不受影响。
+
 ```text
 知识库已有目录/
   原有的其他论文.md
-  A_Paper_An_Example.pdf
   A_Paper_An_Example.md
-  Another_Paper.pdf
   Another_Paper.md
   images/                       # 多篇论文共享，仅有图片时创建
 ```
@@ -101,7 +99,7 @@ PDF 将上传至 MinerU，使用账号的可用额度。配置项包括模型、
 .venv/Scripts/obsidian-papers.exe --convert-pdf "D:/Notes/Papers/A_Paper_An_Example.pdf" --title "A Paper: An Example"
 ```
 
-只转换已有 PDF，不启动校园下载，无需重新确认关闭代理。未完成任务的远端批次与参数保存在技能的 `config/.state/`，不会放进知识库或上传 Git；成功后删除该任务检查点。重试优先复用原任务，PDF 或解析参数发生变化时拒绝静默复用。已存在的同名 Markdown 不会自动覆盖或触发新的付费转换；请先检查现有笔记。认证、配额或远端失败需要核实后处理，不会无限重试。
+只转换已有 PDF，不启动校园下载，无需重新确认关闭代理。成功后同样默认删除该 PDF；需要保留时加 `--keep-pdf`。未完成任务的远端批次与参数保存在技能的 `config/.state/`，不会放进知识库或上传 Git；成功后删除该任务检查点。重试优先复用原任务，PDF 或解析参数发生变化时拒绝静默复用。已存在的同名 Markdown 不会自动覆盖或触发新的付费转换；请先检查现有笔记。认证、配额或远端失败需要核实后处理，不会无限重试。
 
 ## 配置与本地数据
 
