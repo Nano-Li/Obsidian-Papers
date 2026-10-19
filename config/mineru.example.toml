@@ -1,0 +1,11 @@
+# Copy to config/mineru.local.toml (Git-ignored). Do not put secrets in this template.
+# Optional: use MINERU_TOKEN instead of storing a token here.
+[mineru]
+token = ""
+model = "pipeline"  # pipeline or vlm
+language = "en"
+ocr = false
+network_mode = "direct"  # direct ignores environment proxies; proxy uses proxy_url
+proxy_url = ""
+poll_seconds = 10
+timeout_seconds = 1800  # A timeout keeps the remote task for resuming.
