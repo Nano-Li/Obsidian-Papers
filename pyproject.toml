@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "obsidian-papers"
-version = "0.1.0"
-description = "Download linked papers through campus Edge access and optionally convert with MinerU."
+version = "0.2.0"
+description = "Download linked papers through campus Edge access and convert with MinerU into a shared Obsidian folder."
 requires-python = ">=3.11"
 dependencies = ["curl-cffi==0.15.0", "playwright>=1.40,<2", "pypdf>=5,<7"]
 

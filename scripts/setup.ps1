@@ -21,3 +21,6 @@ if (-not (Test-Path -LiteralPath 'config/mineru.local.toml')) {
     Copy-Item -LiteralPath 'config/mineru.example.toml' -Destination 'config/mineru.local.toml'
 }
 Write-Host 'Setup complete. Use .venv/Scripts/obsidian-papers.exe --help'
+Write-Host 'PDF + Markdown is the default. First use needs a MinerU token.'
+Write-Host 'Run .venv/Scripts/obsidian-papers.exe --configure-mineru to enter and save it privately.'
+Write-Host 'For PDF downloads without MinerU, use --pdf-only.'

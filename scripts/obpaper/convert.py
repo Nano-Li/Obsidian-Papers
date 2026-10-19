@@ -7,8 +7,16 @@ import time
 from dataclasses import replace
 
 from .mineru import Client, MinerUError, load_settings, extract_result, staging_directory, conversion_lock
-from .naming import title_filename
+from .naming import title_filename, _extract_title_from_layout
 from .validation import validate_pdf
+from .export import flatten_result
+
+
+def checkpoint_path(pdf: Path, config: Path) -> Path:
+    key = hashlib.sha256(str(pdf.resolve()).encode('utf-8')).hexdigest()
+    folder = config.resolve().parent / '.state'
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / (key + '.mineru.json')
 
 
 def save_state(path, state):
@@ -18,31 +26,28 @@ def save_state(path, state):
 
 
 def convert(pdf: Path, title: str, config: Path) -> Path:
-    with conversion_lock(pdf):
-        return _convert(pdf, title, config)
+    checkpoint = checkpoint_path(pdf, config)
+    with conversion_lock(checkpoint):
+        return _convert(pdf, title, config, checkpoint)
 
 
-def _convert(pdf: Path, title: str, config: Path) -> Path:
+def _convert(pdf: Path, title: str, config: Path, checkpoint: Path) -> Path:
     if not validate_pdf(pdf, 1024)[0] or pdf.stat().st_size > 200 * 1024 * 1024:
         raise ValueError('Input must be a valid PDF no larger than 200 MB')
     settings = load_settings(config)
-    settings = replace(settings, token=os.environ.get('MINERU_TOKEN') or settings.token)
+    settings = replace(settings, token=(os.environ.get('MINERU_TOKEN') or settings.token).strip())
     if not settings.token:
         raise ValueError('Set MINERU_TOKEN or the token in your private MinerU config')
     with pdf.open('rb') as handle:
         fingerprint = hashlib.file_digest(handle, 'sha256').hexdigest()
     options = dict(settings.options(), is_ocr=settings.ocr)
-    checkpoint = pdf.with_suffix('.mineru.json')
     state = json.loads(checkpoint.read_text(encoding='utf-8')) if checkpoint.exists() else {}
     identity = dict(sha256=fingerprint, options=options, title=title)
     if state and any(state.get(k) != v for k, v in identity.items()):
         raise ValueError('PDF, title or parser options changed; use a separate output folder')
-    output = pdf.parent / 'markdown'
-    if state.get('markdown'):
-        existing = Path(state['markdown'])
-        if existing.is_file():
-            return existing
-        raise ValueError('Saved Markdown is missing; restore it or use a separate output folder')
+    output = pdf.parent
+    if not state and (output / (title_filename(title) + '.md')).exists():
+        raise ValueError('同名 Markdown 已存在，未创建新的 MinerU 任务；请检查现有笔记')
     state.update(identity)
     client = Client(settings)
     try:
@@ -61,7 +66,7 @@ def _convert(pdf: Path, title: str, config: Path) -> Path:
         while time.monotonic() < deadline:
             result = client.result(state['batch_id'])
             if result.get('state') == 'failed':
-                raise MinerUError('MinerU task failed; check the dashboard; checkpoint retained')
+                raise MinerUError('MinerU task failed; check the dashboard; checkpoint retained', stop=True)
             if result.get('state') == 'done':
                 if not result.get('full_zip_url'):
                     raise MinerUError('Completed task lacks a result ZIP URL')
@@ -70,21 +75,12 @@ def _convert(pdf: Path, title: str, config: Path) -> Path:
                     client.download(result['full_zip_url'], archive)
                     extracted = staging / 'extracted'
                     markdown = extract_result(archive, extracted)
-                    named = markdown.with_name(title_filename(title) + '.md')
-                    if named != markdown and named.exists():
-                        raise MinerUError('Title conflicts with another file in the result')
-                    markdown.rename(named)
-                    # Keep Markdown beside its original relative image directories.
-                    relative = named.relative_to(extracted)
-                    if output.exists():
-                        existing = output / relative
-                        if not existing.is_file() or existing.read_bytes() != named.read_bytes():
-                            raise MinerUError('Existing Markdown differs; refusing to overwrite')
-                    else:
-                        extracted.rename(output)
-                    state['markdown'] = str(output / relative)
-                    save_state(checkpoint, state)
-                    return output / relative
+                    # Use minerU-kit's first-page title extraction before cleanup.
+                    extracted_title = _extract_title_from_layout(markdown.parent / 'layout.json')
+                    result_path = flatten_result(extracted, markdown, output, extracted_title or title)
+                # Staging (ZIP, JSON and other artifacts) is gone before returning.
+                checkpoint.unlink(missing_ok=True)
+                return result_path
             time.sleep(min(settings.poll_seconds, max(0, deadline - time.monotonic())))
         raise MinerUError('Timed out; rerun the same command to resume the saved task')
     finally:

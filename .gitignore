@@ -8,6 +8,7 @@ dist/
 .env.*
 !.env.example
 config/*.local.toml
+config/.state/
 browser_profiles/
 _references/
 downloads/
