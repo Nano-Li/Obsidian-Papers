@@ -9,7 +9,7 @@
 - **直接整理进 Obsidian**：按论文标题命名，文件直接放入指定的已有目录，图片共享 `images/`，不为论文额外建文件夹，并自动清理转换中间产物。
 
 ```text
-对话中提供论文链接 → 确认校园网 → 下载并转换 → 知识库中的 Markdown 和图片
+对话中提供论文链接 → 本地窗口确认并下载（期间可能断线）→ 恢复代理 → 模型转换与整理
 ```
 
 ## 安装
@@ -42,7 +42,7 @@ PDF 将上传至 MinerU，使用账号的可用额度。配置项包括模型、
 
 > 使用 $obsidian-papers，把这些论文链接通过校园网下载并转成 Markdown，放入知识库现有的论文目录。
 
-脚本入口：
+下面是直接终端模式；需要关闭代理、可能与模型断线时，优先使用下一节的独立两阶段任务：
 
 ```powershell
 # 默认下载 PDF 并转换 Markdown，输出目录可以已经有其他论文
@@ -57,25 +57,51 @@ PDF 将上传至 MinerU，使用账号的可用额度。配置项包括模型、
 
 脚本不带 `--output` 时保存到本项目的 `downloads/`。通过 Skill 使用时优先根据指定知识库和已有文献分类确定目录；目标不明确时先询问。不会自行按论文或批次新建子文件夹；需要新目录时明确指定该目录即可。
 
-### 校园网确认与登录
+### 关闭代理后仍可执行：独立本地任务
 
-**专用 Edge 不能避开系统 TUN。** 程序沿用 AutoPaper 的下载暂停机制，在启动浏览器和网络下载前提示：
+**不需要关闭 Clash 后回到 Codex 回复 YES。** 原 AutoPaper 使用独立 `.bat` 窗口接收确认并下载，本项目沿用同一机制。
 
-```text
-请退出 Clash（包括 TUN 模式），关闭 Obsidian Papers 专用 Edge 窗口。
-断开代理后，本脚本仍会独立运行；每篇完成后会自动保存结果。
-确认已经完成上述操作，并允许专用 Edge 开始下载？输入 YES 后回车：
-```
-
-只有输入 `YES` 才继续；取消、无输入或未确认都不会开始下载。Codex 已在对话中取得本批次相同确认时可用 `--campus-confirmed`，不能自行省略用户确认。确认后整批下载与转换连续执行，不逐篇打断。
-
-专用 Edge 使用 `browser_profiles/edge-obsidian-papers/`，不使用日常 profile。它忽略代理环境变量并使用 `--no-proxy-server`，但不会退出 Clash 或修改系统网络。需要校园登录时：
+代理还开着、Codex 仍在线时，先准备链接、目录、token 和本地任务：
 
 ```powershell
-.venv/Scripts/obsidian-papers.exe "论文链接" --prepare-profile
+.venv/Scripts/obsidian-papers.exe "论文链接1" "论文链接2" --output "D:/Notes/Papers" --prepare-task
+# 如果只要 PDF，准备任务时加 --pdf-only
 ```
 
-同样完成校园确认，在打开的专用 Edge 中登录，回终端按回车关闭，再运行正常工作流。
+命令返回实际的 `start.bat` 和 `STATUS.md` 路径，位于本技能的 `config/.state/tasks/<任务ID>/`；此时没有开始下载。Codex 可以打开该启动文件，也可以自己双击。
+
+1. **先打开 `start.bat`**，确认独立本地窗口已经在等待。
+2. 退出 Clash（包括 TUN 模式），关闭本技能的专用 Edge。
+3. **在该本地窗口输入 `YES`**，不用在 Codex 对话中回复。窗口中的提示为：
+
+   ```text
+   请退出 Clash（包括 TUN 模式），关闭 Obsidian Papers 专用 Edge 窗口。
+   断开代理后，本脚本仍会独立运行；每篇完成后会自动保存结果。
+   请在此本地窗口输入 YES，不需要在关闭代理后回复 Codex。
+   确认已经完成上述操作，并允许专用 Edge 开始下载？输入 YES 后回车：
+   ```
+
+4. 关闭代理后可能无法与 Codex 对话。本地脚本只下载原始 PDF，保存到任务的 `raw/<序号>/source.pdf`；不写入知识库，不做标题重命名、转换或 PDF 删除。无需模型在线；未输入 YES 或取消不会开始下载。下载后窗口停留，状态为 `awaiting_model`。
+5. **恢复代理和模型连接后**，让 Codex 检查同一任务的 `STATUS.md`、`downloads.json`、日志、标题和目标位置。模型可以先预览，再执行整理：
+
+   ```powershell
+   .venv/Scripts/obsidian-papers.exe --finish-task "任务目录" --dry-run
+   .venv/Scripts/obsidian-papers.exe --finish-task "任务目录"
+   ```
+
+   此时才转换为 Markdown、按标题命名并归档到知识库，删除成功转换的 PDF 及清理空暂存目录。`--pdf-only` 和 `--keep-pdf` 的原有选项仍有效。不要把整理命令放进独立启动文件；重命名和删除等操作留给重新联网后的模型执行。下载结束只是阶段完成，不代表知识库已整理完成，也无需重新下载一次。
+
+任务文件不含 token，只引用本地私人配置；如果原来只在当前会话的 `MINERU_TOKEN` 环境变量中配置了 token，准备任务时会将它保存到 `mineru.local.toml`，供独立窗口读取。任务目录与日志都被 Git 忽略，不写入知识库。
+
+专用 Edge 使用 `browser_profiles/edge-obsidian-papers/`，不使用日常 profile。它忽略代理环境变量并使用 `--no-proxy-server`，但不能避开系统 TUN，也不会替你退出 Clash。直接在自己的终端运行不带 `--prepare-task` 的命令时，也会在该终端等待 YES 并独立执行。
+
+需要校园登录时也可先准备独立任务：
+
+```powershell
+.venv/Scripts/obsidian-papers.exe "论文链接" --prepare-profile --prepare-task
+```
+
+在本地窗口确认后进入专用 Edge 登录，回到该窗口按回车关闭，再准备正常下载任务。不使用聊天确认或跳过本地确认的参数。
 
 ### 输出与命名
 

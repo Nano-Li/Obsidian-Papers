@@ -44,9 +44,11 @@ def doi_from(value):
     return match.group(0).rstrip('.,;') if match else ''
 
 
-async def download_one(ctx, engine, url, title, root):
+async def download_one(ctx, engine, url, title, root, *, stage_only=False):
     from pypdf import PdfReader
-    temporary = root / ('.paper-' + uuid.uuid4().hex + '.part')
+    temporary = root / ('source.pdf' if stage_only else '.paper-' + uuid.uuid4().hex + '.part')
+    if stage_only and temporary.exists():
+        raise ValueError('本地暂存 PDF 已存在，请恢复代理后检查该任务，不要重复下载')
     title, doi, links = title, doi_from(url), []
     try:
         # A direct PDF URL may not be navigable in headful Edge. Fetch it
@@ -95,8 +97,14 @@ async def download_one(ctx, engine, url, title, root):
             reader = PdfReader(BytesIO(temporary.read_bytes()))
             title = reader.metadata.title if reader.metadata else None
         if not title or not str(title).strip():
-            raise ValueError('无法可靠取得论文标题；请传入 --title 后重试')
+            if stage_only:
+                title = '待核对标题'
+            else:
+                raise ValueError('无法可靠取得论文标题；请传入 --title 后重试')
         title = str(title).strip()
+        if stage_only:
+            print(f'已暂存原始 PDF（尚未命名归档）: {temporary}')
+            return temporary, title
         name = title_filename(title)
         pdf = root / (name + '.pdf')
         if pdf.exists():
@@ -107,7 +115,8 @@ async def download_one(ctx, engine, url, title, root):
         print(f'PDF: {pdf}')
         return pdf, title
     finally:
-        temporary.unlink(missing_ok=True)
+        if not stage_only:
+            temporary.unlink(missing_ok=True)
 
 
 async def run(args):
@@ -117,7 +126,9 @@ async def run(args):
     engine = load_engine()
     PROFILE.mkdir(parents=True, exist_ok=True)
     root = Path(args.output).expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    task_folder = getattr(args, 'task_folder', None)
+    if task_folder is None:
+        root.mkdir(parents=True, exist_ok=True)
     failures = 0
     async with async_playwright() as pw:
         ctx = await pw.chromium.launch_persistent_context(
@@ -132,8 +143,14 @@ async def run(args):
             for index, url in enumerate(args.urls):
                 try:
                     title = args.title[index] if args.title else None
-                    pdf, title = await download_one(ctx, engine, url, title, root)
-                    if not args.pdf_only:
+                    if task_folder is not None:
+                        staged = task_folder / 'raw' / f'{index + 1:03d}'
+                        staged.mkdir(parents=True, exist_ok=True)
+                        pdf, title = await download_one(ctx, engine, url, title, staged, stage_only=True)
+                        args.progress('downloaded', index=index + 1, pdf=str(pdf.resolve()), title=title, url=url)
+                    else:
+                        pdf, title = await download_one(ctx, engine, url, title, root)
+                    if not args.pdf_only and task_folder is None:
                         markdown = await asyncio.to_thread(convert, pdf, title, Path(args.mineru_config),
                                                            keep_pdf=args.keep_pdf)
                         print(f'Markdown: {markdown}')
@@ -150,12 +167,11 @@ async def run(args):
     return 2 if failures else 0
 
 
-def confirm_campus(*, confirmed=False):
+def confirm_campus():
     # Copied from AutoPaper edge_download.py; only project/status labels adapted.
     print('请退出 Clash（包括 TUN 模式），关闭 Obsidian Papers 专用 Edge 窗口。')
     print('断开代理后，本脚本仍会独立运行；每篇完成后会自动保存结果。')
-    if confirmed:
-        return True
+    print('请在此本地窗口输入 YES，不需要在关闭代理后回复 Codex。')
     try:
         answer = input('确认已经完成上述操作，并允许专用 Edge 开始下载？输入 YES 后回车：')
     except EOFError:
@@ -174,7 +190,7 @@ def report_error(exc, index=None):
     print((f'第 {index} 篇：' if index else '') + message, file=sys.stderr)
 
 
-def main(argv=None):
+def main(argv=None, *, progress=None, task_folder=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
@@ -189,19 +205,27 @@ def main(argv=None):
     parser.add_argument('--mineru-config', default=str(ROOT / 'config/mineru.local.toml'))
     parser.add_argument('--configure-mineru', action='store_true', help='隐藏输入 token 并保存到私人配置')
     parser.add_argument('--prepare-profile', action='store_true')
-    parser.add_argument('--campus-confirmed', action='store_true', help='仅在用户已明确确认退出 Clash/TUN 并关闭专用 Edge 后使用')
+    parser.add_argument('--prepare-task', action='store_true', help='准备独立本地启动文件，关闭代理后在本地窗口输入 YES')
+    parser.add_argument('--finish-task', type=Path, help='恢复代理后由模型接续任务，转换、命名、归档并清理')
     parser.add_argument('--dry-run', action='store_true', help='仅检查参数，不联网、请求 token 或打开浏览器')
     parser.add_argument('--convert-pdf', type=Path, help='只转换已有 PDF；需 --title')
     args = parser.parse_args(argv)
+    args.task_folder, args.progress = task_folder, progress
     try:
         from .configuration import ensure_token
         args.output = str(Path(args.output).expanduser().resolve())
         args.mineru_config = str(Path(args.mineru_config).expanduser().resolve())
+        if args.finish_task:
+            if args.urls or args.prepare_task or args.convert_pdf or args.prepare_profile:
+                parser.error('--finish-task cannot be combined with a new download or conversion')
+            from .local_task import finish_task
+            print(json.dumps(finish_task(args.finish_task, dry_run=args.dry_run), ensure_ascii=False, indent=2))
+            return 0
         if args.configure_mineru:
             ensure_token(Path(args.mineru_config), configure=True)
             return 0
         if args.convert_pdf:
-            if not args.title or len(args.title) != 1 or args.urls or args.pdf_only:
+            if not args.title or len(args.title) != 1 or args.urls or args.pdf_only or args.prepare_task:
                 parser.error('--convert-pdf requires one --title and no URLs or --pdf-only')
             if args.dry_run:
                 print(args.convert_pdf.resolve().with_name(title_filename(args.title[0]) + '.md'))
@@ -226,8 +250,30 @@ def main(argv=None):
             return 0
         if not args.pdf_only and not args.prepare_profile:
             ensure_token(Path(args.mineru_config))
-        if not confirm_campus(confirmed=args.campus_confirmed):
+        if args.prepare_task:
+            from .local_task import prepare_task
+            load_engine()  # Verify the installed dependency while the model is still online.
+            if not args.pdf_only and not args.prepare_profile:
+                from .configuration import save_token
+                from .mineru import load_settings
+                private = Path(args.mineru_config)
+                if not load_settings(private).token.strip():
+                    # A window opened from Explorer does not inherit Codex-only
+                    # environment variables; persist the already configured token.
+                    save_token(private, os.environ['MINERU_TOKEN'].strip())
+            folder = prepare_task(args)
+            print(f'本地启动文件: {folder / "start.bat"}')
+            print(f'任务状态: {folder / "STATUS.md"}')
+            print('保持代理开启，先打开 start.bat；随后关闭 Clash，在该窗口输入 YES。无需再回复 Codex。')
             return 0
+        if progress:
+            progress('waiting_for_confirmation')
+        if not confirm_campus():
+            if progress:
+                progress('cancelled')
+            return 0
+        if progress:
+            progress('running')
         os.chdir(ROOT)
         for key in list(os.environ):
             if key.lower() in {'http_proxy', 'https_proxy', 'all_proxy'}:

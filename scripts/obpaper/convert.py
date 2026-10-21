@@ -25,13 +25,13 @@ def save_state(path, state):
     temporary.replace(path)
 
 
-def convert(pdf: Path, title: str, config: Path, *, keep_pdf: bool = False) -> Path:
+def convert(pdf: Path, title: str, config: Path, *, keep_pdf: bool = False, output_dir: Path | None = None) -> Path:
     checkpoint = checkpoint_path(pdf, config)
     with conversion_lock(checkpoint):
-        return _convert(pdf, title, config, checkpoint, keep_pdf=keep_pdf)
+        return _convert(pdf, title, config, checkpoint, keep_pdf=keep_pdf, output_dir=output_dir)
 
 
-def _convert(pdf: Path, title: str, config: Path, checkpoint: Path, *, keep_pdf: bool) -> Path:
+def _convert(pdf: Path, title: str, config: Path, checkpoint: Path, *, keep_pdf: bool, output_dir: Path | None) -> Path:
     if not validate_pdf(pdf, 1024)[0] or pdf.stat().st_size > 200 * 1024 * 1024:
         raise ValueError('Input must be a valid PDF no larger than 200 MB')
     settings = load_settings(config)
@@ -45,7 +45,8 @@ def _convert(pdf: Path, title: str, config: Path, checkpoint: Path, *, keep_pdf:
     identity = dict(sha256=fingerprint, options=options, title=title)
     if state and any(state.get(k) != v for k, v in identity.items()):
         raise ValueError('PDF, title or parser options changed; use a separate output folder')
-    output = pdf.parent
+    output = Path(output_dir).resolve() if output_dir is not None else pdf.parent
+    output.mkdir(parents=True, exist_ok=True)
     if not state and (output / (title_filename(title) + '.md')).exists():
         raise ValueError('同名 Markdown 已存在，未创建新的 MinerU 任务；请检查现有笔记')
     state.update(identity)
